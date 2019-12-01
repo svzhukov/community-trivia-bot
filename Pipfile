@@ -10,6 +10,8 @@ gspread = "*"
 oauth2client = "*"
 discord-py = "*"
 pandas = "*"
+boto3 = "*"
+boto = "*"
 
 [requires]
 python_version = "3.7"
