@@ -9,7 +9,6 @@ import collections
 import time
 import socket
 import re
-import configparser
 import os
 import traceback
 import asyncio
@@ -20,15 +19,11 @@ class Tw():
     infomessage = 'Trivia Bot loaded.'
 
     # SETTINGS FOR END USERS
-    trivia_filename = 'triviaset'  # Specify the filename (default "triviaset")
-    trivia_filetype = 'csv'  # Specify the file type. CSV (MUST be UTF-8), XLS, XLSX
-
-    trivia_questions: int = 'INIT'  # Total questions to be answered for trivia round
+    trivia_questions = 0  # Total questions to be answered for trivia round
     trivia_hinttime_1: int = 'INIT'  # Seconds to 1st hint after question is asked
     trivia_hinttime_2: int = 'INIT'  # Seconds to 2nd hint after question is asked
     trivia_skiptime: int = 'INIT'  # Seconds until the question is skipped automatically
     trivia_questiondelay: float = 'INIT'  # Seconds to wait after previous question is answered before asking next question
-    trivia_bonusvalue: int = 'INIT'  # BONUS: How much points are worth in BONUS round
     admins = 'INIT'
 
     # CUSTOM
@@ -39,7 +34,7 @@ class Tw():
     trivia_creator_points_reward: int = 'INIT'
 
     userscores = {}  # Dictionary holding user scores, kept in '!' and loaded/created upon trivia. [1,2,3] 1: Session score 2: Total trivia points 3: Total wins
-    COMMANDLIST = ["!triviastart", "!triviaend", "!top3", "!hint", "!score", "!next", "!stop", "!loadconfig", "!backuptrivia", "!loadtrivia", "!creator"]  # All commands
+    COMMANDLIST = ["!triviastart", "!triviaend", "!top3", "!hint", "!score", "!skip", "!kill"]  # All commands
     SWITCH = True  # Switch to keep bot connection running
     trivia_active = False  # Switch for when trivia is being played
     trivia_questionasked = False  # Switch for when a question is actively being asked
@@ -47,7 +42,6 @@ class Tw():
     trivia_pre_questionasked_time = 0  # Same as above but for prequestion message
     trivia_hintasked = 0  # 0 = not asked, 1 = first hint asked, 2 = second hint asked
     session_questionno = 0  # Question # in current session
-    session_bonusround = 0  # 0 - not bonus, 1 - bonus
     TIMER = 0  # Ongoing active timer
 
     tsrows = 0
@@ -63,7 +57,6 @@ class Tw():
     column_position_creator = 5
     column_position_difficulty = 6
     trivia_pre_questionasked = False
-    trivia_noname_creator = "Неизвестный"
 
     socket = None
 
@@ -81,53 +74,43 @@ class chatvar():  # Variables for IRC / Twitch chat function
 # CODE
 
 def loadconfig():
-    config = configparser.ConfigParser()
-    config.read('config.txt')
-    Tw.trivia_filename = config['Trivia Settings']['trivia_filename']
-    Tw.trivia_filetype = config['Trivia Settings']['trivia_filetype']
-    Tw.trivia_questions = int(config['Trivia Settings']['trivia_questions'])
-    Tw.trivia_hinttime_1 = int(config['Trivia Settings']['trivia_hinttime_1'])
-    Tw.trivia_hinttime_2 = int(config['Trivia Settings']['trivia_hinttime_2'])
-    Tw.trivia_skiptime = int(config['Trivia Settings']['trivia_skiptime'])
-    Tw.trivia_questiondelay = int(config['Trivia Settings']['trivia_questiondelay'])
-    Tw.trivia_bonusvalue = int(config['Trivia Settings']['trivia_bonusvalue'])
+    Tw.trivia_hinttime_1 = int(os.environ['TRIVIA_HINTTIME_1'])
+    Tw.trivia_hinttime_2 = int(os.environ['TRIVIA_HINTTIME_2'])
+    Tw.trivia_skiptime = int(os.environ['TRIVIA_SKIPTIME'])
+    Tw.trivia_questiondelay = int(os.environ['TRIVIA_QUESTIONDELAY'])
+    Tw.trivia_pre_questionasked_delay = int(os.environ['TRIVIA_PRE_QUESTIONASKED_DELAY'])
 
-    Tw.trivia_answervalue = int(config['Custom Settings']['trivia_answervalue'])
-    Tw.trivia_extra_points_per_avg_diff = int(config['Custom Settings']['trivia_extra_points_per_avg_diff'])
-    Tw.trivia_extra_points_per_hard_diff = int(config['Custom Settings']['trivia_extra_points_per_hard_diff'])
-    Tw.trivia_pre_questionasked_delay = int(config['Custom Settings']['trivia_pre_questionasked_delay'])
-    Tw.trivia_creator_points_reward = int(config['Custom Settings']['trivia_creator_points_reward'])
+    Tw.trivia_answervalue = int(os.environ['TRIVIA_ANSWERVALUE'])
+    Tw.trivia_extra_points_per_avg_diff = int(os.environ['TRIVIA_EXTRA_POINTS_PER_AVG_DIFF'])
+    Tw.trivia_extra_points_per_hard_diff = int(os.environ['TRIVIA_EXTRA_POINTS_PER_HARD_DIFF'])
+    Tw.trivia_creator_points_reward = int(os.environ['TRIVIA_CREATOR_POINTS_REWARD'])
 
-    admin1 = config['Admin Settings']['admins']
-    Tw.admins = admin1.split(',')
-
-    chatvar.HOST = str(config['Bot Settings']['HOST'])
-    chatvar.PORT = int(config['Bot Settings']['PORT'])
-    chatvar.NICK = config['Bot Settings']['NICK']
-    chatvar.PASS = config['Bot Settings']['PASS']
-    chatvar.CHAN = config['Bot Settings']['CHAN']
+    Tw.admins = os.environ['BOT_ADMINS'].strip().split(',')
+    chatvar.HOST = 'irc.twitch.tv'
+    chatvar.PORT = 6667
+    chatvar.NICK = os.environ['BOT_NICK']
+    chatvar.PASS = os.environ['BOT_PASS']
+    chatvar.CHAN = os.environ['BOT_CHANNEL']
 
 
 ##### Trivia start build. ts = "Trivia set" means original master trivia file. qs = "Quiz set" means what's going to be played with for the session
-def load_trivia_file():
+def load_trivia_file(ext):
     # FUNCTION VARIABLES
-    if Tw.trivia_filetype == 'csv':  # open trivia source based on type
-        print('\ncsv\n')
-        Tw.ts = pd.read_csv(Tw.trivia_filename + "." + Tw.trivia_filetype)
+    if ext == 'csv':  # open trivia source based on type
+        Tw.ts = pd.read_csv('triviaset' + '.' + ext)
+    elif ext == 'xlsx':
+        Tw.ts = pd.read_excel('triviaset' + '.' + ext)
+
     Tw.tsrows = Tw.ts.shape[0]  # Dynamic # of rows based on triviaset
     Tw.qs = pd.DataFrame(columns=list(Tw.ts))  # Set columns in quizset to same as triviaset
 
     # Shows all column names
     pd.set_option('display.max_columns', None)
     pd.set_option('display.max_rows', None)
-    print(Tw.qs.head())
+    Tw.trivia_questions = int(Tw.tsrows)
 
 
-async def trivia_start():
-    gs.build_trivia()
-    load_trivia_file()
-
-    sendmessage("Викторина запущена. Составление базы вопросов для сегодняшней игры...")
+def build():
     qs_buildrows = 0  # starts at zero, must reach trivia_questions to be complete during while loop
 
     ### Loop through TS and build QS until qs_buildrows = trivia_numbers
@@ -147,10 +130,16 @@ async def trivia_start():
             Tw.ts.drop(Tw.ts.index[[temprando]])
 
 
+async def trivia_start():
+    authors = gs.build_trivia()
+    load_trivia_file('csv')
+
+    sendmessage("Викторина запущена. Составление базы вопросов для сегодняшней игры...")
+    build()
 
     print("Quizset built.")
     Tw.trivia_active = True
-    msg = "Викторина готова! Количество вопросов: " + str(Tw.trivia_questions) + ". Начало викторины через " + str(Tw.trivia_questiondelay) + " секунд."
+    msg = "Викторина готова! Количество вопросов: " + str(Tw.trivia_questions) + ", авторы: " + ", ".join(authors.keys()) + ". Начало викторины через " + str(Tw.trivia_questiondelay) + " секунд."
     sendmessage(msg)
     await asyncio.sleep(Tw.trivia_questiondelay)
     trivia_call_prequestion()
@@ -158,24 +147,20 @@ async def trivia_start():
 
 def loadscores():
     # Load score list
-
-    # TODO Cloudcube downlaod
-
     try:
         with open('userscores.txt', 'r') as fp:
             print("Score list loaded.")
             Tw.userscores = json.load(fp)
     except (FileNotFoundError, IOError, json.decoder.JSONDecodeError):
         with open('userscores.txt', "w") as fp:
-            Tw.userscores = {'trivia_dummy': [0, 0, 0]}
+            Tw.userscores = {}
             json.dump(Tw.userscores, fp)
 
 
 def dumpscores():
     with open('userscores.txt', 'w') as fp:
         json.dump(Tw.userscores, fp)
-
-    # TODO Cloudcube upload
+    gs.save_scores()
 
 
 ### Trivia command switcher
@@ -190,17 +175,9 @@ async def trivia_commandswitch(cleanmessage, username):
         if cleanmessage == "!triviaend":
             if Tw.trivia_active:
                 await trivia_end()
-        if cleanmessage == "!stop":
+        if cleanmessage == "!kill":
             stopbot()
-        if cleanmessage == "!loadconfig":
-            loadconfig()
-            sendmessage("Config reloaded.")
-        if cleanmessage == "!backuptrivia":
-            trivia_savebackup()
-            sendmessage("Backup created.")
-        if cleanmessage == "!loadtrivia":
-            await trivia_loadbackup()
-        if cleanmessage == "!next":
+        if cleanmessage == "!skip":
             await trivia_skipquestion()
 
     # ACTIVE TRIVIA COMMANDS
@@ -228,44 +205,14 @@ async def trivia_commandswitch(cleanmessage, username):
             if Tw.trivia_hintasked == 2:
                 trivia_askhint(1)
 
-        if cleanmessage == "!bonus":
-            if Tw.session_bonusround == 0:
-                trivia_startbonus()
-                Tw.session_bonusround = 1
-            if Tw.session_bonusround == 1:
-                trivia_endbonus()
-                Tw.session_bonusround = 0
-
     # GLOBAL COMMANDS
     if cleanmessage == "!score":
         trivia_userscore(username)
 
 
-### Custom convenience
-def show_stack():
-    for line in traceback.format_stack():
-        print(line.strip())
-
-
-def category_str():
-    category = "Без категории"
-    # category = str(Tw.qs.iloc[Tw.session_questionno, Tw.column_position_category])
-    return category
-
-
-def difficulty_str():
-    difficulty = "средняя"
-    if Tw.qs.iloc[Tw.session_questionno, Tw.column_position_difficulty] == 0:
-        difficulty = "легкая"
-    if Tw.qs.iloc[Tw.session_questionno, Tw.column_position_difficulty] == 2:
-        difficulty = "тяжелая"
-    return difficulty
-
-
+### Custom ###
 def creator_str():
-    creator = Tw.trivia_noname_creator
-    if len(Tw.qs.iloc[Tw.session_questionno, Tw.column_position_creator]) >= 1:
-        creator = Tw.qs.iloc[Tw.session_questionno, Tw.column_position_creator]
+    creator = Tw.qs.iloc[Tw.session_questionno, Tw.column_position_creator]
     return creator
 
 
@@ -274,7 +221,7 @@ def difficulty_extra_user_points():
     extra_points = Tw.trivia_extra_points_per_avg_diff
     if difficulty == 0:
         extra_points = 0
-    if difficulty == 2:
+    elif difficulty == 2:
         extra_points = Tw.trivia_extra_points_per_hard_diff
     return extra_points
 
@@ -284,7 +231,7 @@ def difficulty_extra_creator_points():
     extra_points = 1
     if difficulty == 0:
         extra_points = 0
-    if difficulty == 2:
+    elif difficulty == 2:
         extra_points = 2
     return extra_points
 
@@ -306,7 +253,8 @@ def trivia_call_prequestion():
     Tw.trivia_pre_questionasked_time = round(time.time())
 
     premsg = "Вопрос #" + str(
-        Tw.session_questionno + 1) + " в категории [" + category_str().capitalize() + "], сложность [" + difficulty_str().capitalize() + "], от пользователя [" + creator_str() + "] ..."
+        Tw.session_questionno + 1) + " в категории [" + str(Tw.qs.iloc[Tw.session_questionno, Tw.column_position_category]) + "], сложность [" + \
+             Tw.qs.iloc[Tw.session_questionno, Tw.column_position_difficulty] + "], от пользователя [" + creator_str() + "] ..."
     sendmessage(premsg)
     print(premsg)
 
@@ -336,32 +284,32 @@ async def trivia_answer(username, cleanmessage):
         Tw.userscores[username] = [answer_points, answer_points, 0]  # sets up new user
 
     # Creator awarded points
-    msg_creator = ''
-    if creator_str() != Tw.trivia_noname_creator:
-        creator_points = Tw.trivia_creator_points_reward + difficulty_extra_creator_points()
-        msg_creator = "Автор вопроса " + creator_str() + " получает " + str(creator_points) + " trivia points"
+    creator_points = Tw.trivia_creator_points_reward + difficulty_extra_creator_points()
+    msg_creator = "Автор вопроса " + creator_str() + " получает " + str(creator_points) + " trivia points"
 
-        key = next((x for x in Tw.userscores.keys() if x == creator_str()), None)
-        if key:
-            Tw.userscores[creator_str()][0] += creator_points
-            Tw.userscores[creator_str()][1] += creator_points
-        else:
-            print("Failed to find creator! Adding new")
-            Tw.userscores[creator_str()] = [creator_points, creator_points, 0]  # sets up new user
+    key = next((x for x in Tw.userscores.keys() if x == creator_str()), None)
+    if key:
+        Tw.userscores[creator_str()][0] += creator_points
+        Tw.userscores[creator_str()][1] += creator_points
+    else:
+        print("Failed to find creator! Adding new")
+        Tw.userscores[creator_str()] = [creator_points, creator_points, 0]  # sets up new user
 
-    dumpscores()  # Save all current scores
-    msg = str(username) + " правильно отвечает на вопрос #" + str(Tw.session_questionno + 1) + "! Ответ ** " + str(
-        Tw.qs.iloc[Tw.session_questionno, Tw.column_position_answer]) + " ** оценивается в " + str(answer_points) + " trivia points. " + str(
+    msg = str(username) + " правильно отвечает на вопрос #" + str(Tw.session_questionno + 1) + "! Ответ \"" + str(
+        Tw.qs.iloc[Tw.session_questionno, Tw.column_position_answer]) + "\" оценивается в " + str(answer_points) + " trivia points. " + str(
         username) + " уже заработал(а) " + str(Tw.userscores[username][0]) + " trivia points в сегодняшней игре."
     msg = msg + " " + msg_creator
-
     print(msg)
     sendmessage(msg)
+
+    gs.answer(Tw.qs.iloc[Tw.session_questionno, Tw.column_position_id], username)
+    dumpscores()  # Save all current scores
+
+
     await asyncio.sleep(Tw.trivia_questiondelay)
     Tw.session_questionno += 1
     reset_question_timings()
     reset_prequestion_timings()
-    trivia_savebackup()
     if Tw.trivia_questions == Tw.session_questionno:  # End game check
         await trivia_end()
     else:
@@ -405,11 +353,6 @@ async def trivia_end():
     reset_prequestion_timings()
     Tw.qs = pd.DataFrame(columns=list(Tw.ts))
 
-    # Clear backup files upon finishing trivia
-    os.remove('backup/backupquizset.csv')
-    os.remove('backup/backupscores.txt')
-    os.remove('backup/backupsession.txt')
-
 
 async def trivia_routinechecks():  # after every time loop, routine checking of various vars/procs
     Tw.TIMER = round(time.time())
@@ -428,14 +371,25 @@ async def trivia_routinechecks():  # after every time loop, routine checking of 
     if ((Tw.TIMER - Tw.trivia_questionasked_time) > Tw.trivia_skiptime and Tw.trivia_active and Tw.trivia_questionasked):
         await trivia_skipquestion()  # Skip question after time is up
 
-    if ((
-            Tw.TIMER - Tw.trivia_pre_questionasked_time) > Tw.trivia_pre_questionasked_delay and Tw.trivia_active and Tw.trivia_pre_questionasked and not Tw.trivia_questionasked):
+    if ((Tw.TIMER - Tw.trivia_pre_questionasked_time) > Tw.trivia_pre_questionasked_delay and Tw.trivia_active and Tw.trivia_pre_questionasked
+            and not Tw.trivia_questionasked):
         trivia_callquestion()  # Ask question after prequestion delay
 
 
 def trivia_askhint(hinttype=0):  # hinttype: 0 = 1st hint, 1 = 2nd hint
-    if (hinttype == 0 and Tw.trivia_questionasked == True):  # type 0, replace 2 out of 3 chars with _
-        print(str(Tw.session_questionno));
+    if (hinttype == 0 and Tw.trivia_questionasked == True):
+        pass
+        prehint = str(Tw.qs.iloc[Tw.session_questionno, Tw.column_position_answer])
+        hint = ''
+
+        for word in prehint.split(" "):
+            for letter in word:
+                word = word.replace(letter, " _ ")
+            hint = "{} {}".format(hint, word)
+        sendmessage("Подсказка #1:" + hint)
+
+    elif (hinttype == 1 and Tw.trivia_questionasked == True):  # type 0, replace 2 out of 3 chars with _
+        print(str(Tw.session_questionno))
         prehint = str(Tw.qs.iloc[Tw.session_questionno, Tw.column_position_answer])
         listo = []
         hint = ''
@@ -448,12 +402,7 @@ def trivia_askhint(hinttype=0):  # hinttype: 0 = 1st hint, 1 = 2nd hint
             counter += 1
         for i in range(len(listo)):
             hint += hint.join(listo[i])
-        sendmessage("Hint #1: " + hint)
-
-    if (hinttype == 1 and Tw.trivia_questionasked == True):  # type 1, replace vowels with _
-        prehint = str(Tw.qs.iloc[Tw.session_questionno, Tw.column_position_answer])
-        hint = re.sub('[aeiou]', ' _ ', prehint, flags=re.I)
-        sendmessage("Hint #2: " + hint)
+        sendmessage("Подсказка #2: " + hint)
 
 
 async def trivia_skipquestion():
@@ -462,7 +411,8 @@ async def trivia_skipquestion():
         reset_question_timings()
         reset_prequestion_timings()
 
-        sendmessage("Время на ответ истекло или вопрос был пропущен. Правильный ответ: " + str(Tw.qs.iloc[Tw.session_questionno - 1, Tw.column_position_answer]) + ". Переход к следующему вопросу")
+        sendmessage("Время на ответ истекло или вопрос был пропущен. Правильный ответ: \"" + str(
+            Tw.qs.iloc[Tw.session_questionno - 1, Tw.column_position_answer]) + "\". Переход к следующему вопросу")
         await asyncio.sleep(Tw.trivia_questiondelay)
         if Tw.trivia_questions == Tw.session_questionno:  # End game check
             await trivia_end()
@@ -470,22 +420,12 @@ async def trivia_skipquestion():
             trivia_call_prequestion()
 
 
-### B O N U S (disabled for now by @enikkk)
-def trivia_startbonus():
-    msg = "B O N U S Round begins! Questions are now worth " + str(Tw.trivia_bonusvalue) + " points!"
-    sendmessage(msg)
-    Tw.trivia_answervalue = Tw.trivia_bonusvalue
-
-
-def trivia_endbonus():
-    msg = "Bonus round is over! Questions are now worth 1 point."
-    sendmessage(msg)
-    Tw.trivia_answervalue = 1
-
-
 ### Top 3 trivia
 def trivia_top3score():
     data2 = {}  # temp dictionary just for keys & sessionscore
+    print(Tw.userscores)
+    print(type(Tw.userscores))
+
     for i in Tw.userscores.keys():
         if Tw.userscores[i][0] > 0:
             data2[i] = Tw.userscores[i][0]
@@ -543,55 +483,6 @@ def calltimer():
     print("Timer: " + str(Tw.TIMER))
 
 
-### BACKUP SAVING/LOADING
-def trivia_savebackup():  # backup session saver
-    # Save session position/variables
-    if not os.path.exists('backup/'):
-        os.mkdir('backup/')
-    config2 = configparser.ConfigParser()
-    config2['DEFAULT'] = {'session_questionno': Tw.session_questionno, 'trivia_answervalue': Tw.trivia_answervalue, 'session_bonusround': Tw.session_bonusround}
-    with open('backup/backupsession.txt', 'w') as c:
-        config2.write(c)
-
-        # Save CSV of quizset
-    Tw.qs.to_csv('backup/backupquizset.csv', index=False, encoding='utf-8')
-    # Save session scores
-    with open('backup/backupscores.txt', 'w') as fp:
-        json.dump(Tw.userscores, fp)
-
-
-async def trivia_loadbackup():  # backup session loader
-    if Tw.trivia_active:
-        sendmessage("Викторина уже запущена. Предыдущая сессия не была загружена.")
-    else:
-        # Load session position/variables
-        config2 = configparser.ConfigParser()
-        config2.read('backup/backupsession.txt')
-
-        Tw.session_questionno = int(config2['DEFAULT']['session_questionno'])
-
-        # Load quizset
-        Tw.qs = pd.read_csv('backup/backupquizset.csv', encoding='utf-8')
-
-        # Load session scores
-
-        try:
-            with open('backup/backupscores.txt', 'r') as fp:
-                print("Score list loaded.")
-                Tw.userscores = json.load(fp)
-        except (FileNotFoundError, IOError, json.decoder.JSONDecodeError):
-            with open('backup/backupscores.txt', "w") as fp:
-                print("No score list, creating...")
-                Tw.userscores = {'trivia_dummy': [0, 0, 0]}
-                json.dump(Tw.userscores, fp)
-
-        print("Loaded backup.")
-        Tw.trivia_active = True
-        sendmessage("Предыдущая сессия успешна загружена. Викторина начнется через " + str(Tw.trivia_questiondelay) + " секунд.")
-        await asyncio.sleep(Tw.trivia_questiondelay)
-        trivia_call_prequestion()
-
-
 ############### CHAT & BOT CONNECT ###############
 async def scanloop():
     try:
@@ -626,9 +517,10 @@ async def scanloop():
         import errno
         if e.errno == errno.EAGAIN: pass # Ignore "[Errno 35] Resource temporarily unavailable" exception
         else: raise
-    except (AttributeError, IndexError) as e:
+    except (IndexError, AttributeError) as e:
         print("{}: {}".format(type(e), e))
-        await asyncio.sleep(2)
+        traceback.print_exception(type(e), e, e.__traceback__)
+
 
 
 ## STARTING PROCEDURES
@@ -666,4 +558,3 @@ async def start_coro():
     load_files()
     await connect_socket()
     await trivia_loop()
-

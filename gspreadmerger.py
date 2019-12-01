@@ -5,11 +5,87 @@ import time
 import asyncio
 from oauth2client.service_account import ServiceAccountCredentials
 import csv
+import boto3
+from botocore.exceptions import ClientError
+from collections import deque
+import os
+
+
+class S3FileManager:
+    client = None
+    bucket = 'cloud-cube-eu'
+    key = 'b34hz576f9il/public/'
+
+    users_file = 'userscores.txt'
+    categories_file = 'categories.txt'
+    merge_requests_file = 'mergerequests.txt'
+
+    @staticmethod
+    def load():
+        S3FileManager.setup_client()
+        S3FileManager.download()
+
+    @staticmethod
+    def setup_client():
+        S3FileManager.client = boto3.client(
+            's3',
+            aws_access_key_id=os.environ['CLOUDCUBE_ACCESS_KEY_ID'],
+            aws_secret_access_key=os.environ['CLOUDCUBE_SECRET_ACCESS_KEY'],
+            region_name='eu-west-1')
+
+    @staticmethod
+    def download():
+        S3FileManager.download_users()
+        S3FileManager.download_categories()
+        S3FileManager.download_requests()
+
+    @staticmethod
+    def upload():
+        S3FileManager.upload_users()
+        S3FileManager.upload_categories()
+        S3FileManager.upload_requests()
+
+    @staticmethod
+    def download_file(file_name):
+        print("S3 download: {}".format(file_name))
+        S3FileManager.client.download_file(S3FileManager.bucket,
+                                           S3FileManager.key + file_name,
+                                           file_name)
+    @staticmethod
+    def upload_file(file_name):
+        print("S3 upload: {}".format(file_name))
+        S3FileManager.client.upload_file(file_name, S3FileManager.bucket,
+                                         S3FileManager.key + file_name)
+
+    @staticmethod
+    def download_users():
+        S3FileManager.download_file(S3FileManager.users_file)
+
+    @staticmethod
+    def download_categories():
+        S3FileManager.download_file(S3FileManager.categories_file)
+
+    @staticmethod
+    def download_requests():
+        S3FileManager.download_file(S3FileManager.merge_requests_file)
+
+    @staticmethod
+    def upload_users():
+        S3FileManager.upload_file(S3FileManager.users_file)
+
+    @staticmethod
+    def upload_categories():
+        S3FileManager.upload_file(S3FileManager.categories_file)
+
+    @staticmethod
+    def upload_requests():
+        S3FileManager.upload_file(S3FileManager.merge_requests_file)
 
 
 class Gspread:
     categories = {}
     mergeRequests = []
+
     newCategories = []
     mergedQuestionCount = 0
     isMerging = False
@@ -26,33 +102,90 @@ class Gspread:
     difficulties = ['0', '1', '2']
     easyDiff, avgDiff, hardDiff = difficulties
     defaultCategoryCode = '0001'
-    apiMail = 'twitch-community-trivia-bot@twitch-community-trivia-bot.iam.gserviceaccount.com'
-    adminsMail = ['en1k89055807894@gmail.com', 'allrape1@gmail.com']
-    baseSheetUrl = 'https://docs.google.com/spreadsheets/d/'
-    mainDataBaseSheetId = '105HTMseRZ4YaND_TfPYG--g9DazB0wPrIlbMRzALXVA'
-    categoriesSheetId = '1ysb4LL6IASqSeX1xLAee0hscHykP1peHAM3Ofrnnd1k'
+
+    # Config
+    apiMail = ''
+    adminsMail = []
+    baseSheetUrl = ''
+    mainDataBaseSheetId = ''
+    categoriesSheetId = ''
 
 
-def build_trivia():
+def answer(question_id, user_name):
+    sheet = Gspread.gc.open_by_key(Gspread.mainDataBaseSheetId).sheet1
+    question_cell = sheet.find(question_id)
+    question = sheet.row_values(question_cell.row)
+
+    try:
+        users_answered = ",{}".format(question[col_index(Gspread.colUsersAnswered)], user_name)
+    except IndexError:
+        users_answered = user_name
+
+    sheet.update_cell(question_cell.row, col_index(Gspread.colDateAnswered) + 1, round(time.time()))
+    sheet.update_cell(question_cell.row, col_index(Gspread.colUsersAnswered) + 1, users_answered)
+
+
+def save_scores():
+    S3FileManager.upload_users()
+
+
+def catgory_repr(code):
+    return "{} / {}".format(Gspread.categories[code]['folder'].capitalize(), Gspread.categories[code]['name'].capitalize())
+
+def diff_repr(code: str):
+    difficulty = "Средняя"
+    if code == Gspread.easyDiff:
+        difficulty = "Легкая"
+    elif code == Gspread.hardDiff:
+        difficulty = "Тяжелая"
+    return difficulty
+
+
+def build_trivia() -> dict:
+    print("Building trivia")
     main_sheet = Gspread.gc.open_by_key(Gspread.mainDataBaseSheetId).sheet1
-
-    allRows = main_sheet.get_all_values()[1:]
-    print(allRows)
-    print('Building building...')
+    allRows = main_sheet.get_all_values()
 
     unanswered = [row for row in allRows if not len(row[col_index(Gspread.colDateAnswered)])]
-    print('\n')
-    print('\n')
-    print('\n')
-    print(unanswered)
-    # for rowIdx, row in enumerate(allRows):
-    #     if len(row[col_index(Gspread.colDateAnswered)]) == 0:
-    #         pass
+
+    authors = {}
+    for question in unanswered:
+        author_name = question[col_index(Gspread.colAuthor)]
+        if author_name in authors.keys():
+            authors[author_name].append(question)
+        else:
+            authors[author_name] = [question]
+
+    q_max = 0
+    if len(authors.keys()) > 2:
+        q_max = 24
+    elif len(authors.keys()) == 2:
+        q_max = 18
+    elif len(authors.keys()) == 1:
+        q_max = 12
+
+    q_max = len(unanswered) if len(unanswered) < q_max else q_max
+    print(q_max)
+
+    trivia = [allRows[0]]
+    d = deque(authors.keys())
+    print(d)
+    for i in range(0, q_max):
+        q = authors[d[0]].pop()
+        q[col_index(Gspread.colCategory)] = catgory_repr(q[col_index(Gspread.colCategory)])
+        q[col_index(Gspread.colDifficulty)] = diff_repr(q[col_index(Gspread.colDifficulty)])
+
+        trivia.append(q)
+        if not len(authors[d[0]]):
+            d.remove(d[0])
+        d.rotate(-1)
+
 
     with open('triviaset.csv', 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerows(unanswered)
+        writer.writerows(trivia)
 
+    return authors
 
 async def merge_list(ctx):
     msg = ""
@@ -176,7 +309,7 @@ def merged_row_from(row):
         elif i == Gspread.colNames.index(Gspread.colCategory):
             if len(row[i]) != 4:
                 newRow[i] = Gspread.defaultCategoryCode
-            elif row[i] not in Gspread.categories:
+            elif row[i] not in Gspread.categories.keys():
                 add_new_category(row[i])
                 newRow[i] = row[i]
             else:
@@ -244,6 +377,7 @@ def generate_error_message(sheetId):
 
         # Wrong column name or order
         for i, col in enumerate(sheet.row_values(1)):
+            print("{} - {}".format(col, Gspread.userColNames[i]))
             if col != Gspread.userColNames[i]:
                 return "Неправильное имя или порядок столбцов"
 
@@ -269,15 +403,21 @@ def generate_error_message(sheetId):
                   "повторите команду "
         else:
             raise
-
     else:
         return None
 
 
 def load():
+    Gspread.apiMail = os.environ['GSPREAD_API_MAIL']
+    Gspread.adminsMail = os.environ['GSPREAD_ADMIN_MAILS'].strip().split(',')
+    Gspread.mainDataBaseSheetId = os.environ['GSPREAD_MAIN_DB_SHEET_ID']
+    Gspread.categoriesSheetId = os.environ['GSPREAD_CATEGORIES_SHEET_ID']
+
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_name('client_secret.json', scope)
     Gspread.gc = gspread.authorize(creds)
+
+    S3FileManager.load()
     load_merge_requests()
     load_categories_list()
 
@@ -296,20 +436,30 @@ def save_merge_requests():
     with open('mergerequests.txt', 'w') as fileHandler:
         print('Saving: {}'.format(Gspread.mergeRequests))
         json.dump(Gspread.mergeRequests, fileHandler)
+    S3FileManager.upload_requests()
 
 
 def load_categories_list():
-    try:
-        with open('categories.txt', 'r') as filehandler:
-            Gspread.categories = json.load(filehandler)
-    except (FileNotFoundError, IOError, json.decoder.JSONDecodeError):
-        with open('categories.txt', 'w'):
-            pass
+    with open('categories.txt', 'r') as filehandler:
+        Gspread.categories = json.load(filehandler)
+
+    if not len(Gspread.categories):
+        print("Categories not found, loading from gspread")
+        sheet = Gspread.gc.open_by_key(Gspread.categoriesSheetId).sheet1
+        allRows = sheet.get_all_values()[1:]
+
+        Gspread.categories = {}
+        for row in allRows:
+            if len(row[2]):
+                Gspread.categories[row[2]] = {"folder": row[0], "name": row[1], "code": row[2]}
+        print(Gspread.categories)
+        save_categories_list()
 
 
 def save_categories_list():
     with open('categories.txt', 'w') as filehandler:
         json.dump(Gspread.categories, filehandler)
+    S3FileManager.upload_categories()
 
 
 def add_new_category(category_code):

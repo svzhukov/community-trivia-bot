@@ -6,6 +6,8 @@ import gspreadmerger as gs
 
 
 class Permissions:
+    admin_role = 'Quinn mains'
+
     class AdminRoleCheckError(commands.CommandError):
         def __init__(self, message: str = None):
             self.message = message if message else "Comand is restricted to bot admin role"
@@ -22,14 +24,13 @@ class Permissions:
 
     @staticmethod
     def has_bot_admin_role(ctx) -> bool:
-        role = os.environ['DISCORD_ADMIN_ROLE']
         try:
-            if int(role) in [dc_role.id for dc_role in ctx.message.author.roles]:
+            if int(Permissions.admin_role) in [dc_role.id for dc_role in ctx.message.author.roles]:
                 return True
             else:
                 raise Permissions.AdminRoleCheckError
         except ValueError:
-            if role in [dc_role.name for dc_role in ctx.message.author.roles]:
+            if Permissions.admin_role in [dc_role.name for dc_role in ctx.message.author.roles]:
                 return True
             else:
                 raise Permissions.AdminRoleCheckError
@@ -43,13 +44,13 @@ class Permissions:
 
 
 #######################################################################
-bot = commands.Bot(command_prefix=(os.environ['DISCORD_BOT_PREFIX'], os.environ['DISCORD_BOT_PREFIX_SECOND']))
+bot = commands.Bot(command_prefix=os.environ['DISCORD_BOT_PREFIX'])
 @bot.command(name='list')
 async def com_merge_list(ctx):
     await gs.merge_list(ctx)
 
 
-@bot.command(name='req')
+@bot.command(name='check')
 async def com_merge_req(ctx, sheet_id):
     await gs.merge_req(ctx, sheet_id)
 
@@ -58,17 +59,6 @@ async def com_merge_req(ctx, sheet_id):
 @commands.check(Permissions.has_bot_admin_role)
 async def merge_com(ctx, sheet_id):
     await gs.merge_com(ctx, sheet_id)
-
-
-@bot.command(name='adminrole')
-@commands.check(Permissions.has_role_management_permissions)
-async def com_admin_role(ctx, *args):
-    if len(args):
-        os.environ['DISCORD_ADMIN_ROLE'] = ' '.join(args)
-        await ctx.send("New bot admin role has been set to **" + ' '.join(args) + "**")
-    else:
-        await ctx.send("Current bot admin role is **{}**, to set a new one specify either role id or role name"
-                       .format(os.environ['DISCORD_ADMIN_ROLE']))
 
 
 @bot.command(name='respond')
