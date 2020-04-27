@@ -69,7 +69,15 @@ async def com_respond(ctx):
 @bot.command(name='test')
 @commands.check(Permissions.has_bot_admin_role)
 async def com_test(ctx):
-    await ctx.send('This is a TEST, admin test yes')
+    await ctx.send('This is a testy TEST, admin test yes')
+
+
+@bot.command(name='board')
+async def com_board(ctx):
+    msg = "{} доска рекордов викторины:\n".format(ctx.guild.name.capitalize())
+    # gs.get_scores()
+
+    await ctx.send(msg)
 
 
 # Discord bot events

@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError
 from collections import deque
 import os
 
-
+# region AWS S3
 class S3FileManager:
     client = None
     bucket = 'cloud-cube-eu'
@@ -110,6 +110,28 @@ class Gspread:
     mainDataBaseSheetId = ''
     categoriesSheetId = ''
 
+
+def get_scores():
+    pass
+    # refresh_token()
+    # sheet = Gspread.gc.open_by_key(Gspread.mainDataBaseSheetId).sheet1
+    # with open('userscores.txt', 'r') as f:
+    #     users = json.load(f)
+
+
+def get_question(question_id):
+    return None
+
+    refresh_token()
+    sheet = Gspread.gc.open_by_key(Gspread.mainDataBaseSheetId).sheet1
+    question_cell = sheet.find(question_id)
+    q = sheet.row_values(question_cell.row)
+    q[col_index(Gspread.colCategory)] = catgory_repr(q[col_index(Gspread.colCategory)])
+    q[col_index(Gspread.colDifficulty)] = diff_repr(q[col_index(Gspread.colDifficulty)])
+
+    return q
+
+    #todo not found exc
 
 def answer(question_id, user_name):
     sheet = Gspread.gc.open_by_key(Gspread.mainDataBaseSheetId).sheet1
@@ -322,6 +344,10 @@ def merged_row_from(row):
         # dateMerge
         elif i == Gspread.colNames.index(Gspread.colDateMerged):
             newRow[i] = round(time.time())
+
+        # author
+        elif i == Gspread.colNames.index(Gspread.colAuthor):
+            newRow[i] = newRow[i].lower()
 
         # other values
         elif i < len(Gspread.userColNames):
